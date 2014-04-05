@@ -42,7 +42,7 @@ runClient :: String       -- ^ Host
           -> ClientApp a  -- ^ Client application
           -> IO a
 runClient host port path ws =
-    runClientWith host port path defaultConnectionOptions [] ws
+    runClientWith host port path defaultConnectionOptions [] [] ws
 
 
 --------------------------------------------------------------------------------
@@ -51,9 +51,11 @@ runClientWith :: String             -- ^ Host
               -> String             -- ^ Path
               -> ConnectionOptions  -- ^ Options
               -> Headers            -- ^ Custom headers to send
+              -> [WireProtocol]           
+              -- ^ Acceptable wire protocols
               -> ClientApp a        -- ^ Client application
               -> IO a
-runClientWith host port path opts customHeaders app = do
+runClientWith host port path opts customHeaders wireProtocols app = do
     -- Create and connect socket
     let hints = S.defaultHints
                     {S.addrFamily = S.AF_INET, S.addrSocketType = S.Stream}
@@ -63,7 +65,7 @@ runClientWith host port path opts customHeaders app = do
     -- Connect WebSocket and run client
     res <- finally
         (S.connect sock (S.addrAddress $ head addrInfos) >>
-         runClientWithSocket sock host path opts customHeaders app)
+         runClientWithSocket sock host path opts customHeaders wireProtocols app)
         (S.sClose sock)
 
     -- Clean up
@@ -82,12 +84,14 @@ runClientWithStream
     -- ^ Connection options
     -> Headers
     -- ^ Custom headers to send
+    -> [WireProtocol]
+    -- ^ Acceptable wire protocols
     -> ClientApp a
     -- ^ Client application
     -> IO a
-runClientWithStream (sIn, sOut) host path opts customHeaders app = do
+runClientWithStream (sIn, sOut) host path opts customHeaders wireProtocols app = do
     -- Create the request and send it
-    request     <- createRequest protocol bHost bPath False customHeaders
+    request     <- createRequest protocol bHost bPath False customHeaders wireProtocols
     bOut        <- Streams.builderStream sOut
     Streams.write (Just $ encodeRequestHead request) bOut
     Streams.write (Just Builder.flush)               bOut
@@ -115,8 +119,10 @@ runClientWithSocket :: S.Socket           -- ^ Socket
                     -> String             -- ^ Path
                     -> ConnectionOptions  -- ^ Options
                     -> Headers            -- ^ Custom headers to send
+                    -> [WireProtocol]           
+                    -- ^ Acceptable wire protocols
                     -> ClientApp a        -- ^ Client application
                     -> IO a
-runClientWithSocket sock host path opts customHeaders app = do
+runClientWithSocket sock host path opts customHeaders wireProtocols app = do
     stream <- Streams.socketToStreams sock
-    runClientWithStream stream host path opts customHeaders app
+    runClientWithStream stream host path opts customHeaders wireProtocols app

@@ -9,11 +9,14 @@ module Network.WebSockets.Http
     , ResponseHead (..)
     , Response (..)
     , HandshakeException (..)
+    , WireProtocol (..)
 
     , encodeRequestHead
     , encodeRequest
     , decodeRequestHead
 
+    , encodeWireProtocolHeader
+      
     , encodeResponseHead
     , encodeResponse
     , decodeResponseHead
@@ -42,21 +45,29 @@ import           Data.ByteString.Char8              ()
 import qualified Data.ByteString.Char8              as BC
 import           Data.ByteString.Internal           (c2w)
 import qualified Data.CaseInsensitive               as CI
+import           Data.Char                          (isSpace)
 import           Data.Dynamic                       (Typeable)
+import           Data.List                          (find)
+import           Data.Maybe                         (fromMaybe)
 import           Data.Monoid                        (mappend, mconcat)
 
 
 --------------------------------------------------------------------------------
 -- | Request headers
 type Headers = [(CI.CI ByteString, ByteString)]
-
+data WireProtocol =
+  BinaryWireProtocol
+  | Base64WireProtocol
+  | OtherWireProtocol (CI.CI ByteString)
+  deriving (Show,Eq)
 
 --------------------------------------------------------------------------------
 -- | An HTTP request. The request body is not yet read.
 data RequestHead = RequestHead
-    { requestPath    :: !B.ByteString
-    , requestHeaders :: Headers
-    , requestSecure  :: Bool
+    { requestPath          :: !B.ByteString
+    , requestHeaders       :: Headers
+    , requestSecure        :: Bool
+    , requestWireProtocols :: [WireProtocol]
     } deriving (Show)
 
 
@@ -116,17 +127,28 @@ instance Exception HandshakeException
 
 --------------------------------------------------------------------------------
 encodeRequestHead :: RequestHead -> Builder.Builder
-encodeRequestHead (RequestHead path headers _) =
-    Builder.copyByteString "GET "      `mappend`
-    Builder.copyByteString path        `mappend`
-    Builder.copyByteString " HTTP/1.1" `mappend`
-    Builder.fromByteString "\r\n"      `mappend`
-    mconcat (map header headers)       `mappend`
+encodeRequestHead (RequestHead path headers _ protocols) =
+    Builder.copyByteString "GET "          `mappend`
+    Builder.copyByteString path            `mappend`
+    Builder.copyByteString " HTTP/1.1"     `mappend`
+    Builder.fromByteString "\r\n"          `mappend`
+    mconcat (map header headersWProtocols) `mappend`
     Builder.copyByteString "\r\n"
   where
+    headersWProtocols = case protocols of
+      [] -> headers
+      ps -> encodeWireProtocolHeader ps :
+            filter ((== wireProtocolHeaderName) . fst) headers
+   
     header (k, v) = mconcat $ map Builder.copyByteString
         [CI.original k, ": ", v, "\r\n"]
 
+encodeWireProtocolHeader ps =
+  ( wireProtocolHeaderName , B.intercalate "," $ fmap encodeWireProtocol ps )
+
+encodeWireProtocol BinaryWireProtocol     = "binary"
+encodeWireProtocol Base64WireProtocol     = "base64"
+encodeWireProtocol (OtherWireProtocol ci) = CI.original ci
 
 --------------------------------------------------------------------------------
 encodeRequest :: Request -> Builder.Builder
@@ -137,13 +159,30 @@ encodeRequest (Request head' body) =
 --------------------------------------------------------------------------------
 -- | Parse an initial request
 decodeRequestHead :: Bool -> A.Parser RequestHead
-decodeRequestHead isSecure = RequestHead
+decodeRequestHead isSecure = mkRequestHead
     <$> requestLine
     <*> A.manyTill decodeHeaderLine newline
     <*> pure isSecure
   where
+    mkRequestHead path headers secure = 
+      RequestHead 
+        path 
+        (filter ((/= wireProtocolHeaderName) . fst) headers)
+        secure
+        (wireProtocolHeaders headers >>= parseWireProtocols)
+
     space   = A.word8 (c2w ' ')
     newline = A.string "\r\n"
+
+    parseWireProtocols = fmap (parseWireProtocol . CI.mk) . commaSplit
+    commaSplit = fmap (BC.dropWhile isSpace) . BC.split ','
+    parseWireProtocol ci =
+      fromMaybe (OtherWireProtocol ci) $ lookup ci [
+        (CI.mk "binary",BinaryWireProtocol)
+        ,(CI.mk "base64",Base64WireProtocol)
+        ]
+
+    wireProtocolHeaders = fmap snd . filter ((== wireProtocolHeaderName) . fst)
 
     requestLine = A.string "GET" *> space *> A.takeWhile1 (/= c2w ' ')
         <* space
@@ -241,3 +280,8 @@ decodeHeaderLine = (,)
     <*  A.option (c2w ' ') (A.word8 (c2w ' '))
     <*> A.takeWhile (/= c2w '\r')
     <*  A.string "\r\n"
+
+--------------------------------------------------------------------------------
+
+wireProtocolHeaderName :: CI.CI ByteString
+wireProtocolHeaderName = CI.mk "Sec-WebSocket-Protocol"

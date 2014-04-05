@@ -10,7 +10,7 @@ import qualified Data.Attoparsec                as A
 import qualified Data.ByteString.Char8          as BC
 import           Test.Framework                 (Test, testGroup)
 import           Test.Framework.Providers.HUnit (testCase)
-import           Test.HUnit                     (Assertion, assert)
+import           Test.HUnit                     (Assertion, assert,(@?=))
 
 
 --------------------------------------------------------------------------------
@@ -22,6 +22,7 @@ tests :: Test
 tests = testGroup "Network.WebSockets.Http.Tests"
     [ testCase "jwebsockets response" jWebSocketsResponse
     , testCase "chromium response"    chromiumResponse
+    , testCase "wire protocol parse"  wireProtocolRequest
     ]
 
 
@@ -44,7 +45,6 @@ jWebSocketsResponse = assert $ case A.parseOnly decodeResponseHead input of
         , ""
         ]
 
-
 --------------------------------------------------------------------------------
 -- | This is a specific response sent by chromium which caused trouble
 chromiumResponse :: Assertion
@@ -58,4 +58,30 @@ chromiumResponse = assert $ case A.parseOnly decodeResponseHead input of
         , "Content-Length:23"
         , ""
         , "No such target id: 20_1"
+        ]
+
+
+--------------------------------------------------------------------------------
+-- | This is testing the new parsing of the protocol in the request head parser.
+--   directly taken from my bug report.    
+
+wireProtocolRequest :: Assertion
+wireProtocolRequest = case A.parseOnly (decodeRequestHead False) input of
+    Left err -> error err
+    Right rh -> requestWireProtocols rh @?= [BinaryWireProtocol,Base64WireProtocol]
+  where
+    input = BC.intercalate "\r\n"
+        [ "GET /websockify HTTP/1.1"
+        , "Upgrade: websocket"
+        , "Connection: Upgrade"
+        , "Host: localhost:5003"
+        , "Origin: http://kanaka.github.io"
+        , "Sec-WebSocket-Protocol: binary, base64"
+        , "Pragma: no-cache"
+        , "Cache-Control: no-cache"
+        , "Sec-WebSocket-Key: U9FEmmtMOzsE9Zhlzsyyfw=="
+        , "Sec-WebSocket-Version: 13"
+        , "Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits, x-webkit-deflate-frame"
+        , "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/33.0.1750.117 Safari/537.36"
+        , "Cookie: __ngDebug=false"
         ]

@@ -11,6 +11,7 @@ import           Control.Exception              (handle)
 import           Data.ByteString.Char8          ()
 import           Data.IORef                     (newIORef, readIORef,
                                                  writeIORef)
+import qualified Data.CaseInsensitive           as CI
 import           Data.Maybe                     (fromJust)
 import qualified System.IO.Streams.Attoparsec   as Streams
 import qualified System.IO.Streams.Builder      as Streams
@@ -29,11 +30,11 @@ import           Network.WebSockets.Tests.Util
 --------------------------------------------------------------------------------
 tests :: Test
 tests = testGroup "Network.WebSockets.Handshake.Test"
-    [ testCase "handshake Hybi13"   testHandshakeHybi13
-    , testCase "handshake reject"   testHandshakeReject
-    , testCase "handshake Hybi9000" testHandshakeHybi9000
+    [ testCase "handshake Hybi13"           testHandshakeHybi13 
+    , testCase "handshake Hybi13NoProtocol" testHandshakeHybi13NoProtocol
+    , testCase "handshake reject"           testHandshakeReject
+    , testCase "handshake Hybi9000"         testHandshakeHybi9000
     ]
-
 
 --------------------------------------------------------------------------------
 testHandshake :: RequestHead -> (PendingConnection -> IO a) -> IO ResponseHead
@@ -60,26 +61,48 @@ rq13 = RequestHead "/mychat"
     , ("Upgrade", "websocket")
     , ("Connection", "Upgrade")
     , ("Sec-WebSocket-Key", "x3JJHMbDL1EzLkh9GBhXDw==")
-    , ("Sec-WebSocket-Protocol", "chat")
     , ("Sec-WebSocket-Version", "13")
     , ("Origin", "http://example.com")
     ]
     False
+    [OtherWireProtocol $ CI.mk "chat"]
 
 
 --------------------------------------------------------------------------------
 testHandshakeHybi13 :: Assertion
 testHandshakeHybi13 = do
     onAcceptFired                     <- newIORef False
+    requestProtocolsSent              <- newIORef []
+    ResponseHead code message headers <- testHandshake rq13 $ \pc -> do
+        writeIORef requestProtocolsSent . requestWireProtocols . pendingRequest $ pc
+        acceptRequest 
+          pc {pendingOnAccept = \_ -> writeIORef onAcceptFired True}
+          (Just $ OtherWireProtocol "chat")
+
+    readIORef onAcceptFired >>= assert
+    readIORef requestProtocolsSent >>= ( @?= [OtherWireProtocol $ CI.mk "chat"])
+    code @?= 101
+    message @?= "WebSocket Protocol Handshake"
+    headers ! "Sec-WebSocket-Accept"        @?= "HSmrc0sMlYUkAGmm5OPpG2HaGWk="
+    headers ! "Connection"                  @?= "Upgrade"
+    lookup "Sec-WebSocket-Protocol" headers @?= Just "chat"
+
+--------------------------------------------------------------------------------
+    
+testHandshakeHybi13NoProtocol :: Assertion
+testHandshakeHybi13NoProtocol = do
+    onAcceptFired                     <- newIORef False
     ResponseHead code message headers <- testHandshake rq13 $ \pc ->
-        acceptRequest pc {pendingOnAccept = \_ -> writeIORef onAcceptFired True}
+        acceptRequest 
+          pc {pendingOnAccept = \_ -> writeIORef onAcceptFired True}
+          Nothing
 
     readIORef onAcceptFired >>= assert
     code @?= 101
     message @?= "WebSocket Protocol Handshake"
-    headers ! "Sec-WebSocket-Accept" @?= "HSmrc0sMlYUkAGmm5OPpG2HaGWk="
-    headers ! "Connection"           @?= "Upgrade"
-
+    headers ! "Sec-WebSocket-Accept"        @?= "HSmrc0sMlYUkAGmm5OPpG2HaGWk="
+    headers ! "Connection"                  @?= "Upgrade"
+    lookup "Sec-WebSocket-Protocol" headers @?= Nothing
 
 --------------------------------------------------------------------------------
 testHandshakeReject :: Assertion
@@ -99,17 +122,17 @@ rq9000 = RequestHead "/chat"
     , ("Connection", "Upgrade")
     , ("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
     , ("Sec-WebSocket-Origin", "http://example.com")
-    , ("Sec-WebSocket-Protocol", "chat, superchat")
     , ("Sec-WebSocket-Version", "9000")
     ]
     False
+    [OtherWireProtocol (CI.mk "chat"),OtherWireProtocol (CI.mk "superchat")]
 
 
 --------------------------------------------------------------------------------
 testHandshakeHybi9000 :: Assertion
 testHandshakeHybi9000 = do
     ResponseHead code _ headers <- testHandshake rq9000 $ \pc ->
-        flip handle (acceptRequest pc) $ \e -> case e of
+        flip handle (acceptRequest pc Nothing) $ \e -> case e of
             NotSupported -> return undefined
             _            -> error $ "Unexpected Exception: " ++ show e
 

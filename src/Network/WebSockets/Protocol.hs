@@ -57,7 +57,7 @@ compatible protocol req = case getRequestSecWebSocketVersion req of
 
 
 --------------------------------------------------------------------------------
-finishRequest :: Protocol -> RequestHead -> Response
+finishRequest :: Protocol ->  RequestHead -> Maybe WireProtocol -> Response
 finishRequest Hybi13 = Hybi13.finishRequest
 
 
@@ -81,5 +81,6 @@ decodeMessages Hybi13 = Hybi13.decodeMessages
 
 --------------------------------------------------------------------------------
 createRequest :: Protocol -> B.ByteString -> B.ByteString -> Bool -> Headers
+              -> [WireProtocol]
               -> IO RequestHead
 createRequest Hybi13 = Hybi13.createRequest

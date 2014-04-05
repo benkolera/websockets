@@ -26,11 +26,12 @@ import           Data.Binary.Get                       (getWord16be,
 import           Data.Bits                             ((.&.), (.|.))
 import           Data.ByteString                       (ByteString)
 import qualified Data.ByteString.Base64                as B64
-import           Data.ByteString.Char8                 ()
+import           Data.ByteString.Char8                 () 
 import qualified Data.ByteString.Lazy                  as BL
 import           Data.Digest.Pure.SHA                  (bytestringDigest, sha1)
 import           Data.Int                              (Int64)
 import           Data.IORef
+import           Data.Maybe                            (maybeToList)
 import           Data.Monoid                           (mappend, mconcat,
                                                         mempty)
 import           Data.Tuple                            (swap)
@@ -54,12 +55,16 @@ headerVersions = ["13"]
 
 --------------------------------------------------------------------------------
 finishRequest :: RequestHead
+              -> Maybe WireProtocol
               -> Response
-finishRequest reqHttp =
-    let !key     = getRequestHeader reqHttp "Sec-WebSocket-Key"
-        !hash    = hashKey key
-        !encoded = B64.encode hash
-    in response101 [("Sec-WebSocket-Accept", encoded)] ""
+finishRequest reqHttp wireProtocol =
+    let !key            = getRequestHeader reqHttp "Sec-WebSocket-Key"
+        !hash           = hashKey key
+        !encoded        = B64.encode hash
+        !acceptHeader   = ("Sec-WebSocket-Accept", encoded) 
+        !protocolHeader = fmap (encodeWireProtocolHeader . (:[])) wireProtocol
+        !headers        = acceptHeader : maybeToList protocolHeader
+    in response101 headers ""
 
 
 --------------------------------------------------------------------------------
@@ -223,10 +228,11 @@ createRequest :: ByteString
               -> ByteString
               -> Bool
               -> Headers
+              -> [WireProtocol]
               -> IO RequestHead
-createRequest hostname path secure customHeaders = do
+createRequest hostname path secure customHeaders protocols = do
     key <- B64.encode `liftM`  getEntropy 16
-    return $ RequestHead path (headers key ++ customHeaders) secure
+    return $ RequestHead path (headers key ++ customHeaders) secure protocols
   where
     headers key =
         [ ("Host"                   , hostname     )
